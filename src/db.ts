@@ -6,15 +6,24 @@ import { type Database } from './types/supabase';
 let supabaseClient: SupabaseClient<Database> | null = null;
 let pgPool: Pool | null = null;
 
+type PromiseResult<T extends PromiseLike<unknown>> = T extends PromiseLike<infer R> ? R : never;
+
 const wait = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
-const withTimeout = async <T>(ms: number, run: (signal: AbortSignal) => Promise<T>): Promise<T> => {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), ms);
+const withTimeout = async <T>(promise: PromiseLike<T>, ms: number): Promise<T> => {
+  let timeoutHandle: ReturnType<typeof setTimeout> | null = null;
+  const timeoutPromise = new Promise<never>((_, reject) => {
+    timeoutHandle = setTimeout(() => {
+      reject(new Error(`Operation timed out after ${ms}ms`));
+    }, ms);
+  });
+
   try {
-    return await run(controller.signal);
+    return await Promise.race([promise, timeoutPromise]);
   } finally {
-    clearTimeout(timeout);
+    if (timeoutHandle) {
+      clearTimeout(timeoutHandle);
+    }
   }
 };
 
@@ -39,12 +48,11 @@ export async function pingSupabase(): Promise<void> {
 
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
     try {
-      await withTimeout(3000, async (signal) => {
-        const { error } = await client.from('users').select('id', { count: 'exact', head: true }).limit(1).abortSignal(signal);
-        if (error) {
-          throw error;
-        }
-      });
+      const query = client.from('users').select('id', { count: 'exact', head: true }).limit(1);
+      const result = await withTimeout<PromiseResult<typeof query>>(query, 3000);
+      if (result.error) {
+        throw result.error;
+      }
       return;
     } catch (error) {
       if (attempt >= maxAttempts) {

@@ -12,6 +12,8 @@ const USERS_SELECT_FIELDS =
 const USER_FETCH_TIMEOUT_MS = 5000;
 const USER_FETCH_MAX_RETRIES = 2;
 
+type PromiseResult<T extends PromiseLike<unknown>> = T extends PromiseLike<infer R> ? R : never;
+
 export class UserServiceUnavailableError extends Error {
   constructor(message: string, cause?: unknown) {
     super(message);
@@ -22,13 +24,20 @@ export class UserServiceUnavailableError extends Error {
 
 const wait = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
-const withTimeout = async <T>(ms: number, run: (signal: AbortSignal) => Promise<T>): Promise<T> => {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), ms);
+const withTimeout = async <T>(promise: PromiseLike<T>, ms: number): Promise<T> => {
+  let timeoutHandle: ReturnType<typeof setTimeout> | null = null;
+  const timeoutPromise = new Promise<never>((_, reject) => {
+    timeoutHandle = setTimeout(() => {
+      reject(new Error(`Operation timed out after ${ms}ms`));
+    }, ms);
+  });
+
   try {
-    return await run(controller.signal);
+    return await Promise.race([promise, timeoutPromise]);
   } finally {
-    clearTimeout(timeout);
+    if (timeoutHandle) {
+      clearTimeout(timeoutHandle);
+    }
   }
 };
 
@@ -122,14 +131,12 @@ export async function getUserByTelegramId(
 ): Promise<UserRecord | null> {
   return runWithRetry('fetch user by telegram_id', async () => {
     try {
-      const { data, error } = await withTimeout(USER_FETCH_TIMEOUT_MS, async (signal) =>
-        supabaseClient
-          .from(USERS_TABLE)
-          .select(USERS_SELECT_FIELDS)
-          .eq('telegram_id', telegramId)
-          .maybeSingle()
-          .abortSignal(signal)
-      );
+      const query = supabaseClient
+        .from(USERS_TABLE)
+        .select(USERS_SELECT_FIELDS)
+        .eq('telegram_id', telegramId)
+        .maybeSingle();
+      const { data, error } = await withTimeout<PromiseResult<typeof query>>(query, USER_FETCH_TIMEOUT_MS);
 
       if (error) {
         throw error;
@@ -192,15 +199,13 @@ export async function ensureUser(
   }
 
   const updated = await runWithRetry('update user username', async () => {
-    const { data, error } = await withTimeout(USER_FETCH_TIMEOUT_MS, async (signal) =>
-      supabaseClient
-        .from(USERS_TABLE)
-        .update({ username: params.username ?? null, updated_at: new Date().toISOString() })
-        .eq('id', existing.id)
-        .select(USERS_SELECT_FIELDS)
-        .single()
-        .abortSignal(signal)
-    );
+    const query = supabaseClient
+      .from(USERS_TABLE)
+      .update({ username: params.username ?? null, updated_at: new Date().toISOString() })
+      .eq('id', existing.id)
+      .select(USERS_SELECT_FIELDS)
+      .single();
+    const { data, error } = await withTimeout<PromiseResult<typeof query>>(query, USER_FETCH_TIMEOUT_MS);
 
     if (error) {
       throw error;
