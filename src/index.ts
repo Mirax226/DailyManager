@@ -2,7 +2,7 @@ import Fastify, { type FastifyReply, type FastifyRequest } from 'fastify';
 import { GrammyError, webhookCallback } from 'grammy';
 import { bot } from './bot';
 import { config } from './config';
-import { getDbPool, getSupabaseClient } from './db';
+import { getDbPool, getSupabaseClient, pingSupabase } from './db';
 import { schemaSync } from './db/schemaSync';
 import { resolveArchiveChatId, setArchiveRuntimeStatus, validateArchiveChannel } from './services/archive';
 import { getCronHealth, isCronAuthorized, runCronTick } from './services/cron.service';
@@ -65,7 +65,33 @@ server.get('/', async () => {
   return { ok: true, service: 'daily-system', ts: new Date().toISOString() };
 });
 
-server.post('/webhook', webhookCallback(bot, 'fastify'));
+const telegramWebhookHandler = webhookCallback(bot, 'fastify');
+
+server.post('/webhook', async (request, reply) => {
+  try {
+    await telegramWebhookHandler(request, reply);
+  } catch (error) {
+    const reqId = request.id;
+    logError('Telegram webhook processing failed', {
+      reqId,
+      error: error instanceof Error ? error.message : String(error),
+      stack: error instanceof Error ? error.stack : undefined
+    });
+
+    await logReporter.report('error', 'Telegram webhook processing failed', {
+      stack: error instanceof Error ? error.stack : undefined,
+      context: {
+        reqId,
+        method: request.method,
+        route: request.routerPath ?? request.url
+      }
+    });
+
+    if (!reply.sent) {
+      reply.code(200).send({ ok: true });
+    }
+  }
+});
 
 server.get(
   '/cron/tick',
@@ -145,8 +171,16 @@ const logArchiveStatus = (logger: typeof server.log): void => {
 const start = async () => {
   try {
     server.log.info('Init start');
+    server.log.info({
+      app_env: config.logReporter.env,
+      supabase_host: config.supabase.host,
+      archive_chat_id_present: Boolean(config.archive.channelId),
+      webhook_url_present: Boolean(config.telegram.webhookUrl)
+    }, 'Startup config summary (sanitized)');
     getDbPool();
     getSupabaseClient();
+    await pingSupabase();
+    server.log.info({ supabase_host: config.supabase.host }, 'Supabase connectivity check passed');
     const migrationSummary = await schemaSync();
     server.log.info(
       {

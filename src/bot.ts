@@ -4,7 +4,7 @@ import type { BotError, Context } from 'grammy';
 
 import { config } from './config';
 
-import { ensureUser } from './services/users';
+import { ensureUser, UserServiceUnavailableError } from './services/users';
 import { getOrCreateUserSettings, setUserLanguageCode, setUserOnboarded, updateUserSettingsJson } from './services/userSettings';
 
 import {
@@ -829,6 +829,9 @@ const handleBotError = async (ctx: Context, error: unknown, traceId: string): Pr
     });
   } catch (err) {
     console.error({ scope: 'bot', event: 'error_handler_failed', err, originalError: error, traceId });
+    if (error instanceof UserServiceUnavailableError) {
+      return;
+    }
     try {
       await ctx.reply(t('errors.unexpected'));
     } catch {
@@ -5216,6 +5219,11 @@ bot.command('debug_inline', async (ctx: Context) => {
 
 bot.callbackQuery('dbg:test', async (ctx) => {
   await safeAnswerCallback(ctx, { text: t('screens.debug_inline.success') });
+});
+
+bot.callbackQuery('system.retry', async (ctx) => {
+  await safeAnswerCallback(ctx);
+  await renderDashboard(ctx);
 });
 
 const navButtons: Array<{ key: string; handler: (ctx: Context) => Promise<void> | void; label?: (locale: Locale) => string }> = [
