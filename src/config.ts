@@ -23,7 +23,10 @@ const envSchema = z.object({
   CRON_MAX_BATCH: z.coerce.number().int().positive().default(20),
   CRON_MAX_RUNTIME_MS: z.coerce.number().int().positive().default(20000),
   TELEGRAM_SEND_DELAY_MS: z.coerce.number().int().nonnegative().default(0),
-  SUPABASE_URL: z.string().url('SUPABASE_URL must be a valid URL'),
+  SUPABASE_URL: z
+    .string()
+    .url('SUPABASE_URL must be a valid URL')
+    .refine((value) => value.startsWith('https://'), 'SUPABASE_URL must start with https://'),
   SUPABASE_SERVICE_ROLE_KEY: z.string().min(1, 'SUPABASE_SERVICE_ROLE_KEY is required'),
   SUPABASE_DB_CONNECTION: z.string().optional(),
   SUPABASE_DB_CONNECTION_STRING: z.string().optional(),
@@ -99,6 +102,7 @@ const envSchema = z.object({
 });
 
 const env = envSchema.parse(process.env);
+const supabaseUrl = new URL(env.SUPABASE_URL);
 
 export const config = {
   server: {
@@ -118,7 +122,8 @@ export const config = {
     telegramSendDelayMs: env.TELEGRAM_SEND_DELAY_MS
   },
   supabase: {
-    url: env.SUPABASE_URL,
+    url: supabaseUrl.toString(),
+    host: supabaseUrl.host,
     serviceRoleKey: env.SUPABASE_SERVICE_ROLE_KEY
   },
   db: {

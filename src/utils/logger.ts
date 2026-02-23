@@ -40,6 +40,7 @@ const parseLevels = (value: string | undefined): Set<LogLevel> => {
 };
 
 const enabledLevels = parseLevels(levelsRaw);
+const metricCounters = new Map<string, number>();
 
 export const levelToNumber = (level: LogLevel): number => {
   switch (level) {
@@ -122,4 +123,10 @@ export const logWarn = (message: string, meta?: LogMeta): void => {
 
 export const logError = (message: string, meta?: LogMeta): void => {
   logWithLevel('error', message, meta);
+};
+
+export const incrementMetricCounter = (name: string): number => {
+  const nextValue = (metricCounters.get(name) ?? 0) + 1;
+  metricCounters.set(name, nextValue);
+  return nextValue;
 };

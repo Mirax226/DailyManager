@@ -1,6 +1,6 @@
 import { InlineKeyboard } from 'grammy';
 import type { Context } from 'grammy';
-import { ensureUser } from '../services/users';
+import { ensureUser, UserServiceUnavailableError } from '../services/users';
 import { getOrCreateUserSettings } from '../services/userSettings';
 import { resolveLocale, t, type Locale } from '../i18n';
 import type { UserRecord } from '../services/users';
@@ -30,6 +30,19 @@ export const updateCachedUserContext = (ctx: Context, patch: Partial<CachedUserC
   setCachedUserContext(ctx, { ...existing, ...patch });
 };
 
+const renderDbUnavailableNotice = async (ctx: Context): Promise<void> => {
+  const retryKeyboard = new InlineKeyboard().text('🔄 Retry', 'system.retry');
+  const text = 'Service temporarily unavailable. Try again.';
+
+  if (ctx.callbackQuery?.message) {
+    const { chat, message_id: messageId } = ctx.callbackQuery.message;
+    await ctx.api.editMessageText(chat.id, messageId, text, { reply_markup: retryKeyboard });
+    return;
+  }
+
+  await ctx.reply(text, { reply_markup: retryKeyboard });
+};
+
 export const ensureUserAndSettings = async (ctx: Context) => {
   const cached = getCachedUserContext(ctx);
   if (cached) return cached;
@@ -37,12 +50,20 @@ export const ensureUserAndSettings = async (ctx: Context) => {
   if (!ctx.from) throw new Error('User not found in context');
   const telegramId = String(ctx.from.id);
   const username = ctx.from.username ?? null;
-  const user = await ensureUser({ telegramId, username });
-  const settings = await getOrCreateUserSettings(user.id);
-  const locale = resolveLocale(((settings.settings_json ?? {}) as { language_code?: string | null }).language_code ?? null);
-  const payload: CachedUserContext = { user, settings, locale };
-  setCachedUserContext(ctx, payload);
-  return payload;
+
+  try {
+    const user = await ensureUser({ telegramId, username }, undefined, ctx.update?.update_id ? String(ctx.update.update_id) : undefined);
+    const settings = await getOrCreateUserSettings(user.id);
+    const locale = resolveLocale(((settings.settings_json ?? {}) as { language_code?: string | null }).language_code ?? null);
+    const payload: CachedUserContext = { user, settings, locale };
+    setCachedUserContext(ctx, payload);
+    return payload;
+  } catch (error) {
+    if (error instanceof UserServiceUnavailableError) {
+      await renderDbUnavailableNotice(ctx);
+    }
+    throw error;
+  }
 };
 
 export const renderScreen = async (ctx: Context, params: RenderScreenParams): Promise<void> => {
